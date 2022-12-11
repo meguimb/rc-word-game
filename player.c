@@ -98,7 +98,7 @@ int do_start_command(char plid [7]){
     if(n==-1)/*error*/
         exit(1);
     // check status from server
-    if (sscanf(buffer, "RSG NOK\n")){
+    if (strcmp(buffer, "RSG NOK\n")==0){
         printf("NOK\n");
     }
     else if (sscanf(buffer, "RSG OK %d %d\n", &word_length, &trials)){
@@ -123,7 +123,22 @@ int do_play_command(char letter){
     }
     write(1,"echo: ", 6); 
     write(1, message, n);
-    // sends message to Game Server using UDP to start a new game
+
+    // receive message from server
+    n=recvfrom(fd, buffer,128,0, (struct sockaddr*)&addr,&addrlen);
+    if(n==-1)/*error*/
+        exit(1);
+    printf(buffer);
+    // check status from server
+    if (strcmp(buffer, "RLG NOK\n")==0){
+        printf("NOK\n");
+    }
+    else if (strcmp(buffer, "RLG OK\n")==0){
+        printf("OK\n");
+    }
+    else if (strcmp(buffer, "RLG WIN\n")==0){
+        printf("WIN\n");
+    }
     return 0;
 }
 
