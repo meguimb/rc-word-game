@@ -30,6 +30,7 @@ int receive_sng_command(char plid[7]);
 int receive_plg_command(char plid[7], char letter, int trials);
 int receive_pwg_command(char plid[7], char word_guess[MAX_WORD_SIZE], int trials);
 int receive_qut_command(char plid[7]);
+int receive_rev_command(char plid[7]);
 int get_max_errors(char *word);
 int does_player_have_active_game(char plid [7]);
 int create_write_game_file(char plid [7], char word [], char filename []);
@@ -40,6 +41,7 @@ int write_letter_trial(char letter, char plid [7]);
 int write_word_guess(char word_guess [], char plid [7]);
 int send_rlg_ok_msg(int user_index, int letter_play);
 int end_game_file_create(char plid [7], char code);
+int delete_active_game(char plid [7]);
 
 
 int fd, errcode;
@@ -93,6 +95,9 @@ int main(void){
         else if(sscanf(buffer, "QUT %s\n", PLID_TEMP)){
             receive_qut_command(PLID_TEMP);
         }
+        else if(sscanf(buffer, "REV %s\n", PLID_TEMP)){
+            receive_rev_command(PLID_TEMP);
+        }
     }
     freeaddrinfo(res);
     close(fd);
@@ -129,6 +134,7 @@ int receive_sng_command(char plid[7]){
             for (int c = 0; c < strlen(active_games[i]->word); c++){
                 active_games[i]->curr_word_guess[c] = '_';
             }
+            active_games[i]->word[strlen(active_games[i]->word)] = '\0';
             active_games[i]->curr_word_guess[strlen(active_games[i]->word)] = '\0';
             // send stuff back to the player/client
             printf("active game created\n");
@@ -182,11 +188,12 @@ int receive_plg_command(char plid[7], char letter, int trials){
         return 1;
     }
 
-    active_games[index]->trials += 1;
     changed = apply_letter_changes(active_games[index]->curr_word_guess, active_games[index]->word, letter);
     if (changed==0){
+        active_games[index]->trials += 1;
         // check if there are more trials left and if not RLG OVR
         if (active_games[index]->trials >= active_games[index]->max_errors){
+            printf("oh fuck please no\n");
             //  RLG OVR
             write_letter_trial(letter, plid);
             end_game_file_create(active_games[index]->player_plid, 'F');
@@ -194,6 +201,7 @@ int receive_plg_command(char plid[7], char letter, int trials){
             n=sendto(fd, response_buffer, 12, 0, (struct sockaddr*)&addr,addrlen);
             if(n==-1)/*error*/
                 exit(1);
+            delete_active_game(plid);
         }
         //  RLG NOK
         else {
@@ -213,6 +221,7 @@ int receive_plg_command(char plid[7], char letter, int trials){
             n=sendto(fd, response_buffer, 12, 0, (struct sockaddr*)&addr,addrlen);
             if(n==-1)/*error*/
                 exit(1);
+            delete_active_game(plid);
         }
         else {
             // RLG OK
@@ -245,6 +254,7 @@ int receive_pwg_command(char plid[7], char word_guess[MAX_WORD_SIZE], int trials
     }
     // save play
     write_word_guess(word_guess, plid);
+    printf("word_guess is %s\n", word_guess);
     active_games[index]->trials++;
     if (strcmp(word_guess,active_games[index]->word)==0){
         end_game_file_create(active_games[index]->player_plid, 'W');
@@ -252,6 +262,7 @@ int receive_pwg_command(char plid[7], char word_guess[MAX_WORD_SIZE], int trials
         n=sendto(fd, response_buffer, 11, 0, (struct sockaddr*)&addr,addrlen);
         if(n==-1)/*error*/
             exit(1); 
+        delete_active_game(plid);
     }
     // NOK and OVR
     else{
@@ -262,6 +273,7 @@ int receive_pwg_command(char plid[7], char word_guess[MAX_WORD_SIZE], int trials
             n=sendto(fd, response_buffer, 11, 0, (struct sockaddr*)&addr,addrlen);
             if(n==-1)/*error*/
                 exit(1); 
+            delete_active_game(plid);
         }
         else {
             sprintf(response_buffer, "RWG NOK %d\n", active_games[index]->trials);
@@ -291,6 +303,38 @@ int receive_qut_command(char plid[7]){
         n=sendto(fd, response_buffer, 7, 0, (struct sockaddr*)&addr,addrlen);
         if(n==-1)/*error*/
             exit(1); 
+    }
+    return 0;
+}
+
+int receive_rev_command(char plid[7]){
+    /*
+    RRV word/status
+    During project development in reply to a REV request the GS server sends a
+    back the word to be guessed.
+    For the final version of the project this command should result in game
+    termination, with the GS server sending a status message. If player PLID had
+    an ongoing game, the GS replies with status = OK, after closing any open
+    TCP connections with this Player. Otherwise the status is ERR.
+    */
+    int index;
+    char response_buffer[64];
+    printf("beginning of rev receiving command\n");
+    index = find_player_game_index(plid);
+    if (index==-1){
+        sprintf(response_buffer, "RRV ERR\n");
+        n=sendto(fd, response_buffer, 8, 0, (struct sockaddr*)&addr,addrlen);
+        if(n==-1)/*error*/
+            exit(1); 
+    }
+    else {
+        printf("rrv, index is %d and word is %s\n", index, active_games[index]->word);
+        // TODO: closing TCP connections
+        sprintf(response_buffer, "RRV %s/OK\n", active_games[index]->word);
+        n=sendto(fd, response_buffer, 9+strlen(active_games[index]->word), 0, (struct sockaddr*)&addr,addrlen);
+        if(n==-1)/*error*/
+            exit(1); 
+        // TODO: terminate game
     }
     return 0;
 }
@@ -359,6 +403,7 @@ int find_player_game_index(char plid [7]){
 int is_play_repeated(char plid [7], char letter){
     char filename[32], buffer [128], line[128];
     FILE *fp;
+    printf("check if play is repeated\n");
     sprintf(filename, "GAMES/GAME_%s.txt", plid);
     fp = fopen(filename, "r");
     while(fgets(line, 128, fp)) {
@@ -390,6 +435,7 @@ int write_letter_trial(char letter, char plid [7]){
     fp = fopen(filename, "a");
     fputs(buffer, fp);
     fclose(fp);
+    printf("file written\n");
     return 0;
 }
 
@@ -463,7 +509,17 @@ em que n succ e n trials s ̃ao o n ́umero de tentativas bem sucedidas e o n ́
 }
 
 int delete_active_game(char plid [7]){
-    
+    int index; Game *player_game;
+    printf("starting to delete active game\n");
+    index = find_player_game_index(plid);
+    player_game = active_games[index];
+    free(player_game->curr_word_guess);
+    free(player_game->word);
+    free(player_game);
+    // free curr_word_guess and word
+    active_games[index] = NULL;
+    printf("game deleted\n");
+    return 0;
 }
 /*
 ficheiros em GAMES/GAME_123456.txt

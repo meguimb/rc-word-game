@@ -9,6 +9,8 @@
 #include <netdb.h>
 #define PORT "8080"
 
+#define STRLEN(s) (sizeof(s)/sizeof(s[0]))
+
 int do_start_command(char plid [7]);
 int do_play_command(char letter);
 int do_guess_command(char word [64]);
@@ -21,6 +23,7 @@ int initialize_word_guess(int length);
 int display_word_guess(int length);
 int display_start_message(int length);
 int update_word_guess(int n, char occurrences [], char letter);
+int do_rev_command();
 
 int fd, errcode, trials, max_errors, ongoing_game=0, playing=1, word_length;
 ssize_t n;
@@ -33,13 +36,13 @@ int main(){
     char letter, input[16], word[64], PLID_TEMP[7];
     while (playing==1){
         fgets(input, sizeof input, stdin);
-        if (sscanf(input, "start %6s", PLID_TEMP) || sscanf(input, "sg %6s", PLID_TEMP)){
+        if (sscanf(input, "start %6s\n", PLID_TEMP) || sscanf(input, "sg %6s\n", PLID_TEMP)){
             do_start_command(PLID_TEMP);
         }
-        else if (sscanf(input, "play %c", &letter) || sscanf(input, "pl %c", &letter)){
+        else if (sscanf(input, "play %c\n", &letter) || sscanf(input, "pl %c\n", &letter)){
             do_play_command(letter);
         }
-        else if (sscanf(input, "guess %s", word) || sscanf(input, "gw %s", word)){
+        else if (sscanf(input, "guess %s\n", word) || sscanf(input, "gw %s\n", word)){
             do_guess_command(word);
         }
         else if (strcmp(input, "scoreboard\n")==0 || strcmp(input, "sb\n")==0){
@@ -57,8 +60,12 @@ int main(){
         else if (strcmp(input, "exit\n")==0){
             do_exit_command();
         }
+        else if (strcmp(input, "rev\n")==0){
+            do_rev_command();
+        }
         else{
             printf("you fucked up\n");
+            printf("%s\n", input);
         }
     }
 
@@ -140,9 +147,9 @@ int do_play_command(char letter){
         printf("ERR or INV: trials not update\n");
     }
     else{
+        n = 0;
         if (sscanf(buffer, "RLG OK %d %d %127c\n", &check_trials, &n, occurrences) == 3){
             update_word_guess(n, occurrences, letter);
-            trials += 1;
         }
         else if (sscanf(buffer, "RLG NOK %d\n", &check_trials)==1){
             printf("NOK: trials update\n");
@@ -150,16 +157,18 @@ int do_play_command(char letter){
         }
         else if (sscanf(buffer, "RLG WIN %d\n", &check_trials)==1){
             update_word_guess(0, NULL, letter);
-            trials += 1;
             printf("WIN: trials update\n");
+            ongoing_game = 0;
+            trials = 0;
             return 0;
         }
         else if (sscanf(buffer, "RLG DUP %d\n", &check_trials)==1){
             printf("DUP PLAY\n");
         }
         else if (sscanf(buffer, "RLG OVR %d\n", &check_trials)==1){
-            printf("GAMER OVER....\n");
-            trials += 1;
+            printf("GAME OVER....\n");
+            ongoing_game = 0;
+            trials = 0;
             return 0;
         }
         else{
@@ -176,6 +185,7 @@ int do_play_command(char letter){
 int do_guess_command(char word [64]){
     char buffer[128], message[128];
     int check_trials;
+    printf("do_guess_command: word is %s\n", word);
     sprintf(message, "PWG %s %s %d\n", PLID, word, trials);
     n = sendto(fd, message, 14+strlen(word), 0, res->ai_addr, res->ai_addrlen);
     if(n==-1){
@@ -199,9 +209,14 @@ int do_guess_command(char word [64]){
     if (strcmp(buffer, "RWG ERR\n")==0 || strcmp(buffer, "RWG INV\n")==0){
         printf("ERR or INV: trials not update\n");
     }
-    else if (sscanf(buffer, "RWG NOK %d\n", &check_trials) || sscanf(buffer, "RWG OVR %d\n", &check_trials) || sscanf(buffer, "RWG WIN %d\n", &check_trials)){
+    else if (sscanf(buffer, "RWG NOK %d\n", &check_trials)){
         printf("NOK or OK or WIN: trials update\n");
         trials += 1;
+    }
+    else if (sscanf(buffer, "RWG OVR %d\n", &check_trials) || sscanf(buffer, "RWG WIN %d\n", &check_trials)){
+        ongoing_game = 0;
+        printf("game over\n");
+        trials = 0;
     }
     return 0;
 }
@@ -243,6 +258,54 @@ int do_quit_command(){
 
 int do_exit_command(){
     printf("exiting the game...\n");
+    return 0;
+}
+
+int do_rev_command(){
+    /*
+    REV PLID
+    Following the rev debug command, and if there is an ongoing game, the Player
+    application sends the GS a message with the player PLID requesting to reveal
+    the word to be guessed.
+    */
+    char word[64], buffer[128], message[128];
+    char delimiter[2] = "/", *ptr;
+    if (ongoing_game==0){
+        return 1;
+    }
+    sprintf(message, "REV %s\n", PLID);
+    n = sendto(fd, message, 11, 0, res->ai_addr, res->ai_addrlen);
+    if(n==-1){
+        exit(1);
+    }
+    addrlen=sizeof(addr);
+    n = recvfrom(fd, buffer,128,0, (struct sockaddr*)&addr,&addrlen);
+    if(n==-1) {
+        exit(1);
+    }
+    write(1,"echo: ", 6); 
+    write(1, buffer, n);
+    n = recvfrom(fd, buffer,128,0, (struct sockaddr*)&addr,&addrlen);
+    if(n==-1) {
+        exit(1);
+    }
+    write(1,"echo: ", 6); 
+    write(1, buffer, n);
+    if (strcmp(buffer, "RRV ERR\n") == 0){
+        printf("RRV ERROR\n");
+    }
+    else if (sscanf(buffer, ("RRV %s\n"), message)==1){
+        ptr = strtok(message, delimiter);
+        printf("word to be guessed is: %s\n", ptr);
+        ptr = strtok(NULL, delimiter);
+        if (strcmp(ptr, "OK") != 0){
+            return 1;
+        }
+    }
+    else{
+        printf("potatoe\n");
+    }
+
     return 0;
 }
 
