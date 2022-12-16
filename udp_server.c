@@ -4,10 +4,13 @@
 #include <stdlib.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <word_image.h>
+#include <time.h>
+#include <errno.h>
 
 #define PORT "8080"
 #define MAX_WORD_SIZE 64
@@ -35,6 +38,9 @@ int is_play_repeated(char plid [7], char letter);
 int apply_letter_changes(char *curr_guess, char word [], char letter);
 int write_letter_trial(char letter, char plid [7]);
 int write_word_guess(char word_guess [], char plid [7]);
+int send_rlg_ok_msg(int user_index, int letter_play);
+int end_game_file_create(char plid [7], char code);
+
 
 int fd, errcode;
 ssize_t n;
@@ -74,12 +80,15 @@ int main(void){
         // check command coming from player.c
         if (sscanf(buffer, "SNG %6s\n", PLID_TEMP)){
             receive_sng_command(PLID_TEMP);
+            continue;
         }
         else if (sscanf(buffer, "PLG %s %c %c\n", PLID_TEMP, &letter, &trials)==3){
             receive_plg_command(PLID_TEMP, letter, trials-'0');
+            continue;
         }
         else if(sscanf(buffer, "PWG %s %s %d\n", PLID_TEMP, word, &trials)){
             receive_pwg_command(PLID_TEMP, word, trials);
+            continue;
         }
         else if(sscanf(buffer, "QUT %s\n", PLID_TEMP)){
             receive_qut_command(PLID_TEMP);
@@ -103,6 +112,7 @@ int receive_sng_command(char plid[7]){
     printf("status is ok\n");
     // if status is OK then:
     for (i=0; i < MAX_ACTIVE_GAMES; i++){
+        printf("%d ", i);
         if (active_games[i] == NULL){
             active_games[i] = (Game *) malloc(sizeof(Game));
             active_games[i]->word = (char*) malloc(64*sizeof(char));
@@ -121,6 +131,7 @@ int receive_sng_command(char plid[7]){
             }
             active_games[i]->curr_word_guess[strlen(active_games[i]->word)] = '\0';
             // send stuff back to the player/client
+            printf("active game created\n");
             break;
         }
     }
@@ -136,14 +147,14 @@ int receive_sng_command(char plid[7]){
 }
 
 int receive_plg_command(char plid[7], char letter, int trials){
-    int index, changed;
-    char response_buffer [9];
+    int index, changed = 0;
+    char response_buffer [64], *buf;
     
     // find this player's game
     index = find_player_game_index(plid);
-    printf("gamer's index found\n");
     if (index==-1){
         //  RLG ERR
+        printf("RLG ERR\n");
         sprintf(response_buffer, "RLG ERR\n", trials);
         n=sendto(fd, response_buffer, 9, 0, (struct sockaddr*)&addr,addrlen);
         if(n==-1)/*error*/
@@ -153,6 +164,7 @@ int receive_plg_command(char plid[7], char letter, int trials){
     // check number of guesses and number of trials
     if (active_games[index]->trials != trials){
         // RLG INV
+        printf("RLG INV\n");
         sprintf(response_buffer, "RLG INV %d\n", active_games[index]->trials);
         n=sendto(fd, response_buffer, 12, 0, (struct sockaddr*)&addr,addrlen);
         if(n==-1)/*error*/
@@ -162,108 +174,82 @@ int receive_plg_command(char plid[7], char letter, int trials){
     // check if this play is repeated
     if (is_play_repeated(active_games[index]->player_plid, letter)==1){
         //  RLG DUP
+        printf("RLG DUP\n");
         sprintf(response_buffer, "RLG DUP %d\n", active_games[index]->trials);
         n=sendto(fd, response_buffer, 12, 0, (struct sockaddr*)&addr,addrlen);
         if(n==-1)/*error*/
             exit(1);
         return 1;
     }
-    // do the play and change trials and curr_word_guess
-    // RLG OK, NOK, WIN
+
+    active_games[index]->trials += 1;
     changed = apply_letter_changes(active_games[index]->curr_word_guess, active_games[index]->word, letter);
     if (changed==0){
+        // check if there are more trials left and if not RLG OVR
+        if (active_games[index]->trials >= active_games[index]->max_errors){
+            //  RLG OVR
+            write_letter_trial(letter, plid);
+            end_game_file_create(active_games[index]->player_plid, 'F');
+            sprintf(response_buffer, "RLG OVR %d\n", active_games[index]->trials);
+            n=sendto(fd, response_buffer, 12, 0, (struct sockaddr*)&addr,addrlen);
+            if(n==-1)/*error*/
+                exit(1);
+        }
         //  RLG NOK
-        sprintf(response_buffer, "RLG NOK %d\n", active_games[index]->trials);
-        n=sendto(fd, response_buffer, 12, 0, (struct sockaddr*)&addr,addrlen);
-        if(n==-1)/*error*/
-            exit(1);
+        else {
+            write_letter_trial(letter, plid);
+            sprintf(response_buffer, "RLG NOK %d\n", active_games[index]->trials);
+            n=sendto(fd, response_buffer, 12, 0, (struct sockaddr*)&addr,addrlen);
+            if(n==-1)/*error*/
+                exit(1);
+        }
     }
     else {
         if (strcmp(active_games[index]->curr_word_guess, active_games[index]->word)==0){
             //  RLG WIN
+            write_letter_trial(letter, plid);
+            end_game_file_create(active_games[index]->player_plid, 'W');
             sprintf(response_buffer, "RLG WIN %d\n",active_games[index]->trials);
             n=sendto(fd, response_buffer, 12, 0, (struct sockaddr*)&addr,addrlen);
             if(n==-1)/*error*/
                 exit(1);
         }
         else {
-            printf("before RLG OK execs\n");
-            int pos [strlen(active_games[index]->word)];
-            int n = 0;
-            for (int i = 0; i < strlen(active_games[index]->word); i++){
-                if (active_games[index]->word[i] == letter){
-                    pos[n] = i;
-                    n++;
-                }
-            }
-            pos[n] = '\0';
-            printf("we have array of positions now");
-            for (int i = 0; i < n; i++){
-                printf("%d ", pos[i]);
-            }
-            printf("\n");
-            //
-            char *buf = (char*) malloc(128*sizeof(char)), *buf_ptr = buf;
-            buf_ptr += sprintf(buf_ptr, "RLG OK %d %d", active_games[index]->trials, n);
-            printf("buf_ptr is %d\n", buf_ptr - buf);
-            for (int i = 0 ; i != n ; i++) {
-                buf_ptr += sprintf(buf_ptr, " %d", pos[i]);
-            }
-            buf_ptr += sprintf(buf_ptr, "\n");
-            printf("here it is:%s", buf);
-
-
-
-            //  RLG OK
-            //sprintf(response_buffer, "RLG OK %d %d", active_games[index]->trials, n);
-            /*for (int i = 0; i < n; i++){
-                sprintf(response_buffer+14 + i*4, " %d", pos[i]);
-            }
-            */
-            //printf("after for\n");
-            // sprintf(response_buffer+14 + n*4, "\n");
-            printf("one more\n");
-            printf("%d\n", buf_ptr-buf);
-            n=sendto(fd, buf, buf_ptr-buf, 0, (struct sockaddr*)&addr,addrlen);
-            //n=sendto(fd, response_buffer, 14+(n*4), 0, (struct sockaddr*)&addr,addrlen);
-            if(n==-1)/*error*/
-                exit(1); 
-            printf("here is the shit\n");
+            // RLG OK
+            send_rlg_ok_msg(index, letter);
+            write_letter_trial(letter, plid);
         }
     }
-    // update trials 
-    active_games[index]->trials += 1;
-    // add play to file
-    write_letter_trial(letter, plid);
-    printf("before returning\n");
     return 0;
 }
 
 int receive_pwg_command(char plid[7], char word_guess[MAX_WORD_SIZE], int trials){
     int index;
-    char response_buffer [9];
+    char response_buffer [16];
     index = find_player_game_index(plid);
     if (index==-1){
         // RLG ERR
         sprintf(response_buffer, "RWG ERR\n");
-        n=sendto(fd, response_buffer, 9, 0, (struct sockaddr*)&addr,addrlen);
+        n=sendto(fd, response_buffer, 8, 0, (struct sockaddr*)&addr,addrlen);
         if(n==-1)/*error*/
             exit(1); 
         return 1;
     }
     // INV
-        if (active_games[index]->trials != trials){
-            sprintf(response_buffer, "RWG INV\n");
-            n=sendto(fd, response_buffer, 9, 0, (struct sockaddr*)&addr,addrlen);
-            if(n==-1)/*error*/
-                exit(1); 
-        }
+    if (active_games[index]->trials != trials){
+        sprintf(response_buffer, "RWG INV %d\n", active_games[index]->trials);
+        n=sendto(fd, response_buffer, 11, 0, (struct sockaddr*)&addr,addrlen);
+        if(n==-1)/*error*/
+            exit(1); 
+        return 1;
+    }
     // save play
     write_word_guess(word_guess, plid);
     active_games[index]->trials++;
     if (strcmp(word_guess,active_games[index]->word)==0){
-        sprintf(response_buffer, "RWG WIN\n");
-        n=sendto(fd, response_buffer, 9, 0, (struct sockaddr*)&addr,addrlen);
+        end_game_file_create(active_games[index]->player_plid, 'W');
+        sprintf(response_buffer, "RWG WIN %d\n", active_games[index]->trials);
+        n=sendto(fd, response_buffer, 11, 0, (struct sockaddr*)&addr,addrlen);
         if(n==-1)/*error*/
             exit(1); 
     }
@@ -271,23 +257,41 @@ int receive_pwg_command(char plid[7], char word_guess[MAX_WORD_SIZE], int trials
     else{
         // OVR
         if (active_games[index]->max_errors <= active_games[index]->trials){
-            sprintf(response_buffer, "RWG OVR\n");
-            n=sendto(fd, response_buffer, 9, 0, (struct sockaddr*)&addr,addrlen);
+            end_game_file_create(active_games[index]->player_plid, 'F');
+            sprintf(response_buffer, "RWG OVR %d\n", active_games[index]->trials);
+            n=sendto(fd, response_buffer, 11, 0, (struct sockaddr*)&addr,addrlen);
             if(n==-1)/*error*/
                 exit(1); 
         }
         else {
-            sprintf(response_buffer, "RWG NOK\n");
-            n=sendto(fd, response_buffer, 9, 0, (struct sockaddr*)&addr,addrlen);
+            sprintf(response_buffer, "RWG NOK %d\n", active_games[index]->trials);
+            n=sendto(fd, response_buffer, 11, 0, (struct sockaddr*)&addr,addrlen);
             if(n==-1)/*error*/
                 exit(1); 
         }
     }
+    printf("end of ifs\n");
     return 0;
 }
 
 int receive_qut_command(char plid[7]){
-    printf("quitting current game of user %s\n", plid);
+    int index;
+    char response_buffer[10];
+    index = find_player_game_index(plid);
+    if (index == -1){
+        sprintf(response_buffer, "RQT ERR\n", active_games[index]->trials);
+        n=sendto(fd, response_buffer, 8, 0, (struct sockaddr*)&addr,addrlen);
+        if(n==-1)/*error*/
+            exit(1); 
+    }
+    else{
+        // end ongoing tcp connections
+        end_game_file_create(active_games[index]->player_plid, 'Q');
+        sprintf(response_buffer, "RQT OK\n", active_games[index]->trials);
+        n=sendto(fd, response_buffer, 7, 0, (struct sockaddr*)&addr,addrlen);
+        if(n==-1)/*error*/
+            exit(1); 
+    }
     return 0;
 }
 
@@ -327,6 +331,7 @@ int does_player_have_active_game(char plid [7]){
         fclose(file);
         return 1;
     }
+    printf("no file for this user\n");
     return 0;
 }
 
@@ -388,6 +393,7 @@ int write_letter_trial(char letter, char plid [7]){
     return 0;
 }
 
+
 int write_word_guess(char word_guess [], char plid [7]){
     char filename[32], buffer [128];
     FILE *fp;
@@ -397,6 +403,67 @@ int write_word_guess(char word_guess [], char plid [7]){
     fputs(buffer, fp);
     fclose(fp);
     return 0;
+}
+
+int send_rlg_ok_msg(int user_index, int letter_play){
+    printf("send rlg ok message\n");
+    char *buf = (char*) malloc(128*sizeof(char)), *buf_ptr = buf;
+    int pos [strlen(active_games[user_index]->word)];
+    int n = 0;
+    for (int i = 0; i < strlen(active_games[user_index]->word); i++){
+        if (active_games[user_index]->word[i] == letter_play){
+            pos[n] = i;
+            n++;
+        }
+    }
+    pos[n] = '\0';
+    buf_ptr += sprintf(buf_ptr, "RLG OK %d %d", active_games[user_index]->trials, n);
+    for (int i = 0 ; i != n ; i++) {
+        buf_ptr += sprintf(buf_ptr, " %d", pos[i]);
+    }
+    buf_ptr += sprintf(buf_ptr, "\n");
+    write(1, buf, 12+n*2);
+    n=sendto(fd, buf, 12+n*2, 0, (struct sockaddr*)&addr,addrlen);
+    //n=sendto(fd, response_buffer, 14+(n*4), 0, (struct sockaddr*)&addr,addrlen);
+    if(n==-1)/*error*/
+        exit(1); 
+    free(buf);
+    return 0;
+}
+
+int end_game_file_create(char plid [7], char code){
+    int ret;
+    FILE *file;
+    char oldname [64], newname [64];
+    time_t now = time(NULL);
+    struct tm *t = gmtime(&now);
+
+    sprintf(oldname, "GAMES/GAME_%s.txt", plid);
+    sprintf(newname, "GAMES/%s/", plid);
+    // create dir for user
+    mkdir(newname, S_IRWXU);
+    sprintf(newname, "GAMES/%s/%d%d%d_%02d%02d%02d_%c.txt", plid, t->tm_year+1900, t->tm_mon+1, 
+        t->tm_mday, t->tm_hour, t->tm_min, t->tm_sec, code);
+    rename(oldname, newname);
+    remove(oldname);
+    return 0;
+}
+
+int score_file_create(char plid [7]){
+    /*
+    score_PLID_DDMMYYYY_HHMMSS.txt
+em que score tem um valor [001 - 100] sempre com trˆes d ́ıgitos e PLID  ́e a identifica ̧c ̃ao do jogador. DDMMYYYY e HHMMSS s ̃ao a data
+e a hora a que o jogo terminou com sucesso respectivamente.
+A designa ̧c ̃ao acima facilita a obten ̧c ̃ao da lista de ’scores’ ordenados por valor decrescente de ’score’.
+O ficheiro scores tem uma  ́unica linha com o seguinte formato:
+score PLID palavra n succ n trials
+em que n succ e n trials s ̃ao o n ́umero de tentativas bem sucedidas e o n ́umero total de tentativas respectivamente.
+    */
+   return 0;
+}
+
+int delete_active_game(char plid [7]){
+    
 }
 /*
 ficheiros em GAMES/GAME_123456.txt
