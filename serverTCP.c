@@ -7,8 +7,9 @@
 #include <sys/stat.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
-#include <netdb.h>
-#include <word_image.h>
+#include <netdprintf("status = OK\n")
+    prsprintf()
+//#include <word_image.h>
 #include <time.h>
 #include <errno.h>
 #include <dirent.h>
@@ -45,7 +46,7 @@ void main(void){
     if(listen(fd,5)==-1)
         exit(1);
     addrlen=sizeof(addr);
-    if(newfd=accept(fd,(struct sockaddr*)&addr, &addrlen))==-1
+    if((newfd=accept(fd,(struct sockaddr*)&addr, &addrlen))==-1)
             exit(1);
     n=read(newfd, buffer, 128);
     if(n==-1)
@@ -89,7 +90,6 @@ int receive_sta_command(char plid[7]){
             exit(1);
         return 1;
     }
-
     if (does_player_have_active_game(plid) == 1){
         strcpy(response_buffer, "status = ACT\n");
         n=sendto(fd, response_buffer, 14, 0, (struct sockaddr*)&addr,addrlen);
@@ -98,6 +98,27 @@ int receive_sta_command(char plid[7]){
         return 1;
     }
 
+}
+
+int receive_ghl_command(int plid){
+    char response_buffer[128];
+    printf("status = OK\n");
+    if (find_image_file(plid) == 0){
+        strcpy(response_buffer, "status = NOK\n");
+        n=sendto(fd, response_buffer, 14, 0, (struct sockaddr*)&addr,addrlen);
+        if(n==-1)/*error*/
+            exit(1);
+        return 1;
+    }
+    else if (find_last_game(plid, response_buffer) == 0){
+        // STA NOK
+        strcpy(response_buffer, "status = NOK\n");
+        n=sendto(fd, response_buffer, 14, 0, (struct sockaddr*)&addr,addrlen);
+        if(n==-1)/*error*/
+            exit(1);
+        return 1;
+    }
+    //abrir o ficheiro com a imagem e hint e imprimir
 }
 
 int find_last_game(int plid, char *fname){
