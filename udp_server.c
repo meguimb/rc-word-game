@@ -23,6 +23,7 @@ typedef struct game {
     char *curr_word_guess;
     int max_errors;
     int trials;
+    int total_guesses;
 } Game;
 
 char *get_random_word_from_file(char filename []);
@@ -42,6 +43,8 @@ int write_word_guess(char word_guess [], char plid [7]);
 int send_rlg_ok_msg(int user_index, int letter_play);
 int end_game_file_create(char plid [7], char code);
 int delete_active_game(char plid [7]);
+int score_file_create(char plid [7], struct tm *time);
+int copy_text_file(char *source, char * destination);
 
 
 int fd, errcode;
@@ -82,15 +85,12 @@ int main(void){
         // check command coming from player.c
         if (sscanf(buffer, "SNG %6s\n", PLID_TEMP)){
             receive_sng_command(PLID_TEMP);
-            continue;
         }
         else if (sscanf(buffer, "PLG %s %c %c\n", PLID_TEMP, &letter, &trials)==3){
             receive_plg_command(PLID_TEMP, letter, trials-'0');
-            continue;
         }
         else if(sscanf(buffer, "PWG %s %s %d\n", PLID_TEMP, word, &trials)){
             receive_pwg_command(PLID_TEMP, word, trials);
-            continue;
         }
         else if(sscanf(buffer, "QUT %s\n", PLID_TEMP)){
             receive_qut_command(PLID_TEMP);
@@ -114,10 +114,8 @@ int receive_sng_command(char plid[7]){
             exit(1);
         return 1;
     }
-    printf("status is ok\n");
     // if status is OK then:
     for (i=0; i < MAX_ACTIVE_GAMES; i++){
-        printf("%d ", i);
         if (active_games[i] == NULL){
             active_games[i] = (Game *) malloc(sizeof(Game));
             active_games[i]->word = (char*) malloc(64*sizeof(char));
@@ -128,6 +126,7 @@ int receive_sng_command(char plid[7]){
             // set max error and number of trial
             active_games[i]->max_errors = get_max_errors(active_games[i]->word);
             active_games[i]->trials = 0;
+            active_games[i]->total_guesses = 0;
 
             // set current word guess (all empty)
             active_games[i]->curr_word_guess = (char*) malloc(64*sizeof(char));
@@ -136,8 +135,6 @@ int receive_sng_command(char plid[7]){
             }
             active_games[i]->word[strlen(active_games[i]->word)] = '\0';
             active_games[i]->curr_word_guess[strlen(active_games[i]->word)] = '\0';
-            // send stuff back to the player/client
-            printf("active game created\n");
             break;
         }
     }
@@ -167,7 +164,7 @@ int receive_plg_command(char plid[7], char letter, int trials){
             exit(1);
         return 1;
     }
-    // check number of guesses and number of trials
+    // check number of guesses and number of errors
     if (active_games[index]->trials != trials){
         // RLG INV
         printf("RLG INV\n");
@@ -187,13 +184,13 @@ int receive_plg_command(char plid[7], char letter, int trials){
             exit(1);
         return 1;
     }
-
+    active_games[index]->total_guesses += 1;
     changed = apply_letter_changes(active_games[index]->curr_word_guess, active_games[index]->word, letter);
     if (changed==0){
         active_games[index]->trials += 1;
-        // check if there are more trials left and if not RLG OVR
+        
+        // check if there are more errors left and if not RLG OVR
         if (active_games[index]->trials >= active_games[index]->max_errors){
-            printf("oh fuck please no\n");
             //  RLG OVR
             write_letter_trial(letter, plid);
             end_game_file_create(active_games[index]->player_plid, 'F');
@@ -255,7 +252,7 @@ int receive_pwg_command(char plid[7], char word_guess[MAX_WORD_SIZE], int trials
     // save play
     write_word_guess(word_guess, plid);
     printf("word_guess is %s\n", word_guess);
-    active_games[index]->trials++;
+    active_games[index]->total_guesses += 1;
     if (strcmp(word_guess,active_games[index]->word)==0){
         end_game_file_create(active_games[index]->player_plid, 'W');
         sprintf(response_buffer, "RWG WIN %d\n", active_games[index]->trials);
@@ -266,6 +263,7 @@ int receive_pwg_command(char plid[7], char word_guess[MAX_WORD_SIZE], int trials
     }
     // NOK and OVR
     else{
+        active_games[index]->trials++;
         // OVR
         if (active_games[index]->max_errors <= active_games[index]->trials){
             end_game_file_create(active_games[index]->player_plid, 'F');
@@ -375,7 +373,6 @@ int does_player_have_active_game(char plid [7]){
         fclose(file);
         return 1;
     }
-    printf("no file for this user\n");
     return 0;
 }
 
@@ -403,7 +400,6 @@ int find_player_game_index(char plid [7]){
 int is_play_repeated(char plid [7], char letter){
     char filename[32], buffer [128], line[128];
     FILE *fp;
-    printf("check if play is repeated\n");
     sprintf(filename, "GAMES/GAME_%s.txt", plid);
     fp = fopen(filename, "r");
     while(fgets(line, 128, fp)) {
@@ -435,7 +431,6 @@ int write_letter_trial(char letter, char plid [7]){
     fp = fopen(filename, "a");
     fputs(buffer, fp);
     fclose(fp);
-    printf("file written\n");
     return 0;
 }
 
@@ -452,7 +447,6 @@ int write_word_guess(char word_guess [], char plid [7]){
 }
 
 int send_rlg_ok_msg(int user_index, int letter_play){
-    printf("send rlg ok message\n");
     char *buf = (char*) malloc(128*sizeof(char)), *buf_ptr = buf;
     int pos [strlen(active_games[user_index]->word)];
     int n = 0;
@@ -483,34 +477,44 @@ int end_game_file_create(char plid [7], char code){
     char oldname [64], newname [64];
     time_t now = time(NULL);
     struct tm *t = gmtime(&now);
-
     sprintf(oldname, "GAMES/GAME_%s.txt", plid);
     sprintf(newname, "GAMES/%s/", plid);
     // create dir for user
     mkdir(newname, S_IRWXU);
     sprintf(newname, "GAMES/%s/%d%d%d_%02d%02d%02d_%c.txt", plid, t->tm_year+1900, t->tm_mon+1, 
         t->tm_mday, t->tm_hour, t->tm_min, t->tm_sec, code);
-    rename(oldname, newname);
+    copy_text_file(oldname, newname);
+    if (code == 'W'){
+        score_file_create(plid, t);
+    }
     remove(oldname);
     return 0;
 }
 
-int score_file_create(char plid [7]){
-    /*
-    score_PLID_DDMMYYYY_HHMMSS.txt
-em que score tem um valor [001 - 100] sempre com trˆes d ́ıgitos e PLID  ́e a identifica ̧c ̃ao do jogador. DDMMYYYY e HHMMSS s ̃ao a data
-e a hora a que o jogo terminou com sucesso respectivamente.
-A designa ̧c ̃ao acima facilita a obten ̧c ̃ao da lista de ’scores’ ordenados por valor decrescente de ’score’.
-O ficheiro scores tem uma  ́unica linha com o seguinte formato:
-score PLID palavra n succ n trials
-em que n succ e n trials s ̃ao o n ́umero de tentativas bem sucedidas e o n ́umero total de tentativas respectivamente.
-    */
-   return 0;
+int score_file_create(char plid [7], struct tm *time){
+    int index, right_guesses, score;
+    FILE *fp;
+    Game *game;
+    char filename [64];
+
+    index = find_player_game_index(plid);
+    game = active_games[index];
+
+    right_guesses = game->total_guesses - game->trials;
+    score = 100 * right_guesses / game->total_guesses;
+
+    sprintf(filename, "SCORES/%03d_%s_%d%d%d_%02d%02d%02d.txt", score, plid, time->tm_year+1900, time->tm_mon+1, 
+        time->tm_mday, time->tm_hour, time->tm_min, time->tm_sec);
+
+    sprintf(buffer, "%d %s %s %d %d", score, plid, game->word, right_guesses, game->total_guesses);
+    fp = fopen(filename, "a");
+    fputs(buffer, fp);
+    fclose(fp);
+    return 0;
 }
 
 int delete_active_game(char plid [7]){
     int index; Game *player_game;
-    printf("starting to delete active game\n");
     index = find_player_game_index(plid);
     player_game = active_games[index];
     free(player_game->curr_word_guess);
@@ -518,24 +522,17 @@ int delete_active_game(char plid [7]){
     free(player_game);
     // free curr_word_guess and word
     active_games[index] = NULL;
-    printf("game deleted\n");
     return 0;
 }
-/*
-ficheiros em GAMES/GAME_123456.txt
-palavra word_file.txt => palavra a decifrar + ficheiro de dicas
-code(1) play(1)
-code(2) play(2)
 
-se code(n) é T (Trial) então play(n) é uma letra enviada pelo jogador
-se code(n) é G (Guess) então play(n) é uma palavra enviada pelo jogador
-
-NOTA: apenas jogadas novas são armazenadas, se a jogada for repetida, o server responde com
-STATUS=DUP e não regista neste ficheiro
-
-TÉRMINO DO JOGO
--> um jogo pode acabar com: sucesso, insucesso ou desistência
--> quando um jogo termina, o ficheiro GAME_123456.txt é transferido para a diretoria do jogador em GAMES/123456/ 
-que é criada após o término do primeiro jogo deste player
--> nome do ficheiro muda => YYYYMMDD_HHMMSS_code.txt em que code é W(Win), F(Fail) ou Q(Quit)
-*/
+int copy_text_file(char *source, char * destination){
+    char ch;
+    FILE *source_file, *destination_file;
+    source_file = fopen(source, "r");
+    destination_file = fopen(destination, "w");
+    while ((ch = fgetc(source_file)) != EOF)
+        fputc(ch, destination_file);
+    fclose(source_file);
+    fclose(destination_file);
+    return 0;
+}
