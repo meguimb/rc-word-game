@@ -13,6 +13,8 @@
 #include <errno.h>
 #include <dirent.h>
 
+#include "server.c"
+
 #define PORT "58011"
 #define MAX_GAMES 10
 
@@ -24,19 +26,13 @@ typedef struct scores {
     int *n_total;
 } Scores;
 
-typedef struct game {
-    char player_plid[7];
-    char *word;
-    int n_succ;
-    int n_total;
-} Game;
-
 int receive_gsb_command(void);
-//int receive_ghl_command(char plid[7]);
-//int receive_sta_command(char plid[7]);
+int receive_ghl_command(char plid[7]);
+int receive_sta_command(char plid[7]);
 int find_last_game(char plid[7], char *fname);
 int find_top_scores(Scores *list);
-int does_player_have_active_game(char plid[7]);
+int does_player_have_active_games(char plid[7]);
+int find_player_game_index(char *PLID);
 
 int fd, errcode;
 ssize_t n;
@@ -46,7 +42,7 @@ struct sockaddr_in addr;
 char buffer[128];
 Scores *scorelist[MAX_GAMES];
 
-int main(void){
+int mn(void){
     char PLID[7];
     int newfd;
 
@@ -80,11 +76,11 @@ int main(void){
     if (sscanf(buffer, "GSB\n"))
         receive_gsb_command();
 
-    //else if(sscanf(buffer, "GHL %s\n", PLID))
-        //receive_ghl_command(PLID); 
+    else if(sscanf(buffer, "GHL %s\n", PLID))
+        receive_ghl_command(PLID); 
 
-    //else if(sscanf(buffer, "STA %s\n", PLID))
-        //receive_sta_command(PLID);
+    else if(sscanf(buffer, "STA %s\n", PLID))
+        receive_sta_command(PLID);
 
     close(newfd);
     
@@ -95,7 +91,7 @@ int main(void){
 
 int receive_gsb_command(void){
     char response_buffer[64];
-    int i;
+    int i, sum;
     int scoreboard[10];
     if (find_top_scores(scorelist) == 0){
         // GSB NOK
@@ -107,12 +103,17 @@ int receive_gsb_command(void){
     }
     printf("status = OK\n");
     for (i = 0; i < 10; i++){
-        printf("%d %s %s %d %d\n",scorelist[i]->score, scorelist[i]->player_plid, scorelist[i]->word, scorelist[i]->n_succ, scorelist[i]->n_total);
+        printf("%d %s %s %d %d\n", scorelist[i]->score, scorelist[i]->player_plid, scorelist[i]->word, scorelist[i]->n_succ, scorelist[i]->n_total);
+        sum = strlen(scorelist[i]->score) + strlen(scorelist[i]->player_plid) + strlen(scorelist[i]->word) + strlen(scorelist[i]->n_succ) + strlen(scorelist[i]->n_total) + 6;
+        n=sendto(fd, response_buffer, sum, 0, (struct sockaddr*)&addr,addrlen);
+        if(n==-1)
+            exit(1);
     }
+    return 0;
+
 }        
 
 
-/*
 int receive_ghl_command(char plid[7]){
     char response_buffer[128];
     char player_filename[16], image_filename[16];
@@ -126,7 +127,7 @@ int receive_ghl_command(char plid[7]){
         strcpy(response_buffer, "status = NOK\n");
         n=sendto(fd, response_buffer, 14, 0, (struct sockaddr*)&addr,addrlen);
         if(n==-1)/*error*/
-            /*exit(1);
+            exit(1);
         return 1;
     }
     sprintf(player_filename, "GAMES/GAME_%s.txt", plid);
@@ -143,59 +144,62 @@ int receive_ghl_command(char plid[7]){
         strcpy(response_buffer, "status = NOK\n");
         n=sendto(fd, response_buffer, 14, 0, (struct sockaddr*)&addr,addrlen);
         if(n==-1)/*error*/
-            /*exit(1);
+            exit(1);
         return 1;
     }
     sprintf(image_filename, "images/%s.jpg", word);
     image = fopen(image_filename, "r");
     //display da imagem no ficheiro
+    n=sendto(fd, image, 14, 0, (struct sockaddr*)&addr,addrlen);
+    if(n==-1)/*error*/
+        exit(1);
     fopen(image_filename, "r");
     fclose(image);
 }
 
 int receive_sta_command(char plid[7]){
     char response_buffer[128];
-    //os valores daqui estão mal tenho que ver isso !!!
-    int n_entries=1, i_file=1, i=1;
+    int i, sum;
     char player_filename[16];
-    Game *game;
     Scores *list;
-    FILE *fp;
 
     if (find_last_game(plid, response_buffer) == 0){
         // STA NOK
         strcpy(response_buffer, "status = NOK\n");
         n=sendto(fd, response_buffer, 14, 0, (struct sockaddr*)&addr,addrlen);
         if(n==-1)/*error*/
-            /*exit(1);
+            exit(1);
         return 1;
     }
-    if (does_player_have_active_game(plid) == 0){
-        strcpy(response_buffer, "status = FIN\n");
-        n=sendto(fd, response_buffer, 14, 0, (struct sockaddr*)&addr,addrlen);
-        if(n==-1)/*error*/
-            /*exit(1);
-        return 1;
-        sprintf(player_filename, "GAMES/GAME_%s.txt", plid);
-        fp = fopen(player_filename, "r");
-        fscanf(fp, "%s %s %d %d", game[n_entries]->PLID[i_file], game[n_entries]->word[i_file], &game[n_entries]->n_succ[i_file], &game[n_entries]->n_tot[i_file]);
-        printf("%s %s %d %d\n", game->player_plid, game->word, game->n_succ, game->n_total);
-        fclose(fp);
-    }
-    if (does_player_have_active_game(plid) == 1){
+    else if (does_player_have_active_games(plid) == 0){
         strcpy(response_buffer, "status = ACT\n");
         n=sendto(fd, response_buffer, 14, 0, (struct sockaddr*)&addr,addrlen);
         if(n==-1)/*error*/
-            /*exit(1);
+            exit(1);
         return 1;
-        sprintf(player_filename, "GAMES/GAME_%s.txt", plid);
-        fp = fopen(player_filename, "r");
-        fscanf(fp, "%d %s %s %d %d", &list[n_entries]->score[i_file], list[n_entries]->PLID[i_file], list[n_entries]->word[i_file], &list[n_entries]->n_succ[i_file], &list[n_entries]->n_tot[i_file]);
-        printf("%d %s %s %d %d\n", list[i].score, list[i].player_plid, list[i].word, list[i].n_succ, list[i].n_total);
-        fclose(fp);
+        i = find_player_game_index(plid);
+        printf("%s %s %d %d %d\n", active_games[i]->player_plid, active_games[i]->word, active_games[i]->curr_word_guess, active_games[i]->errors, active_games[i]->trials);
+        sum = strlen(active_games[i]->player_plid) + strlen(active_games[i]->word) + strlen(active_games[i]->curr_word_guess) + strlen(active_games[i]->errors) + strlen(active_games[i]->trials) + 6;
+        n=sendto(fd, response_buffer, sum, 0, (struct sockaddr*)&addr,addrlen);
+        if(n==-1)/*error*/
+            exit(1);
     }
+    /*
+    else if (find_last_game(plid, response_buffer) == 1){
+        strcpy(response_buffer, "status = FIN\n");
+        n=sendto(fd, response_buffer, 14, 0, (struct sockaddr*)&addr,addrlen);
+        if(n==-1)
+            exit(1);
+        return 1;
+        i = find_player_game_index(plid);
+        printf("%s %s %d %d %d %d\n", active_games[i]->player_plid, active_games[i]->word, active_games[i]->curr_word_guess, active_games[i]->errors, active_games[i]->trials, active_games[i]->score);
+        sum = strlen(active_games[i]->player_plid) + strlen(active_games[i]->word) + strlen(active_games[i]->curr_word_guess) + strlen(active_games[i]->errors) + strlen(active_games[i]->trials) + strlen(active_games[i]->score) + 7;
+        n=sendto(fd, response_buffer, sum, 0, (struct sockaddr*)&addr,addrlen);
+        if(n==-1)
+            exit(1);
+    }*/
     
-}*/
+}
 
 int find_top_scores(Scores *list) {
     struct dirent **filelist;
@@ -259,7 +263,7 @@ int find_last_game(char plid[7], char *fname){
     return(found);   
 }
 
-int does_player_have_active_game(char plid[7]){
+int does_player_have_active_games(char plid[7]){
     char player_filename[16];
     FILE *file;
     sprintf(player_filename, "GAMES/GAME_%s.txt", plid);
