@@ -15,6 +15,7 @@
 #define MAX_PORT_SIZE 6
 #define MAX_HOST_INFO_SIZE 1024
 #define DEFAULT_PORT "58011"
+#define MAX_WORD_SIZE 64
 
 int fd, errcode;
 ssize_t n;
@@ -23,7 +24,7 @@ struct addrinfo hints, *res;
 struct sockaddr_in addr;
 char buffer[128];
 int trials;
-char game_word[30];
+char game_word[MAX_WORD_SIZE];
 char host_info [MAX_HOST_INFO_SIZE];
 char port [MAX_PORT_SIZE];
 
@@ -34,6 +35,7 @@ void play(char* PLID, char letter);
 void guess(char* PLID, char* word, int size);
 void quit(char* PLID);
 void rev(char* PLID);
+int update_word(int occ, char letter);
 
 
 int main(int argc, char *argv[]) {
@@ -83,6 +85,7 @@ int main(int argc, char *argv[]) {
         }
         else if (strcmp(input, "exit\n")==0){
             quit(PLID);
+            printf("Exiting Game...\n");
             break;
         }
         else if (strcmp(input, "rev\n")==0){
@@ -98,7 +101,7 @@ int main(int argc, char *argv[]) {
 
 
 void start(char* PLID) {
-    char *msg = malloc(11);
+    char *msg = malloc(11*sizeof(char));
     char status[3];
     int n_letters, n_errors;
     sprintf(msg, "SNG %s\n", PLID);
@@ -119,17 +122,25 @@ void start(char* PLID) {
             printf(" _");
         }
         printf("\n");
+        printf("Remember you have %d errors max!\n", n_errors);
+    }
+    else if (strcmp(status, "NOK")==0) {
+        printf("This user has an active game already!\n");
     }
 }
 
 void play(char* PLID, char letter) {
-    char *msg = malloc(15);
+    char *msg = malloc(15*sizeof(char));
     char status[3];
     int occ, t;
     int o = 0;
     sprintf(msg, "PLG %s %c %d\n", PLID, letter, trials);
-    if (trials>9) {n=sendto(fd, msg, 16, 0, res->ai_addr, res->ai_addrlen);}
-    else {n=sendto(fd, msg, 15, 0, res->ai_addr, res->ai_addrlen);}
+    if (trials>9) {
+        n=sendto(fd, msg, 16, 0, res->ai_addr, res->ai_addrlen);
+    }
+    else {
+        n=sendto(fd, msg, 15, 0, res->ai_addr, res->ai_addrlen);
+    }
     if (n == -1) {exit(1);}
     free(msg);
     addrlen = sizeof(addr);
@@ -138,16 +149,7 @@ void play(char* PLID, char letter) {
     sscanf(buffer, "RLG %s %d", status, &t);
     if(strcmp(status, "OK") == 0) {
         sscanf(buffer, "RLG %s %d %d", status, &t, &occ);
-        if(trials>9) {o=1;};
-        for(int i = 0; i < occ; i++) {
-            if(buffer[12+i*2+o] == ' ' || buffer[12+i*2+o] == '\n') {
-                game_word[(buffer[11+i*2+o] - '0')-1] = letter;
-            }
-            else {
-                game_word[10*(buffer[11+i*2+o] - '0')+(buffer[12+i*2+o] -'0')-1] = letter;
-                o++;
-            }
-        }
+        update_word(occ, letter);
         trials++;
         printf("Word:");
         for(int i = 0; i < strlen(game_word); i++) {
@@ -158,11 +160,17 @@ void play(char* PLID, char letter) {
     else if(strcmp(status, "NOK") == 0) {
         trials++;
         printf("Letter not in word.\n");
+        printf("Word:");
+        for(int i = 0; i < strlen(game_word); i++) {
+            printf(" %c", game_word[i]);
+        }
+        printf("\n");
     }
     else if(strcmp(status, "WIN") == 0) {printf("You won!\n");}
     else if(strcmp(status, "DUP") == 0) {printf("Letter already guessed.\n");}
     else if(strcmp(status, "OVR") == 0) {printf("Game over.\n");}
     else if(strcmp(status, "INV") == 0) {printf("Invalid number of trials.\n");}
+    else if(strcmp(status, "ERR") == 0) {printf("No ongoing game for this player.\n");}
     else{printf("Error.\n");}
 }
 
@@ -190,9 +198,10 @@ void guess(char* PLID, char* word, int size) {
 }
 
 void quit(char* PLID) {
-    char *msg = malloc(11);
+    char *msg = malloc(11*sizeof(char));
     char status[3];
-    for(int i = 0; i < 60; i++) {
+    // clean current word
+    for(int i = 0; i < MAX_WORD_SIZE; i++) {
         game_word[i] = '\0';
     }
     sprintf(msg, "QUT %s\n", PLID);
@@ -203,7 +212,9 @@ void quit(char* PLID) {
     n=recvfrom(fd, buffer, 128, 0, (struct sockaddr*) &addr, &addrlen);
     if (n == -1) {exit(1);}
     sscanf(buffer, "RQT %s", status);
-    if(strcmp(status, "OK") == 0) {printf("Game ended.\n");}
+    if (strcmp(status, "OK") == 0) {
+        printf("Game ended.\n");
+    }
 }
 
 void rev(char* PLID) {
@@ -272,6 +283,24 @@ int connect_to_udp_server(){
     errcode = getaddrinfo(host_info, port, &hints, &res);
     if (errcode != 0) {
         exit(1);
+    }
+    return 0;
+}
+
+int update_word(int occ, char letter){
+    // update current word guess
+    int o = 0; // o is the offset
+    if(trials>9) {
+        o=1;
+    };
+    for(int i = 0; i < occ; i++) {
+        if(buffer[12+i*2+o] == ' ' || buffer[12+i*2+o] == '\n') {
+            game_word[(buffer[11+i*2+o] - '0')-1] = letter;
+        }
+        else {
+            game_word[10*(buffer[11+i*2+o] - '0')+(buffer[12+i*2+o] -'0')-1] = letter;
+            o++;
+        }
     }
     return 0;
 }

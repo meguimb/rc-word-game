@@ -5,20 +5,20 @@
 #include <time.h>
 #include <word_image.h>
 
+int word_index = 0;
 
-char *get_random_line(char filename [64]){
+char *get_line(char filename [64], int max_words){
+    FILE *fp;
+    int i=0, totalWords;
     char *word = (char*) malloc(64*sizeof(char));
 
-    FILE *fp;
-    int i=0, totalWords, random_index;
-
-    totalWords = (int) get_number_of_lines(filename);
-    random_index = get_random_index(totalWords);
     fp = fopen(filename, "r");
-    while (i != random_index){
+    fgets(word, 64, fp);
+    while (i != word_index){
         fgets(word, 64, fp);
         i++;
     }
+    word_index = (word_index + 1) % max_words;
     return word;
 }
 
@@ -31,20 +31,15 @@ int get_number_of_lines(char filename [64]){
  
     chr = getc(fp);
     while (chr != EOF){
-        if (chr == 'n'){
+        if (chr == '\n'){
             count_lines = count_lines + 1;
         }
         chr = getc(fp);
     }
     fclose(fp); 
-    return count_lines-1;
+    return count_lines;
 }
 
-int get_random_index(int max){
-    srand(time(NULL));   // Initialization, should only be called once.
-    int r = rand() % max; 
-    return r;
-}
 
 char *get_word_from_line(char *line){
     char *word = (char*) malloc(64*sizeof(char)), *words;

@@ -20,7 +20,7 @@
 
 int receive_cmd_arguments(int argc, char *argv []);
 int make_udp_connection();
-char *get_random_word(char filename []);
+char *get_word(char filename []);
 int get_max_errors(char *word);
 int find_player_game_index(char *PLID);
 int is_play_repeated(char plid [7], char letter);
@@ -38,7 +38,9 @@ int do_rsg(char status [], int index);
 int do_rlg(char status [4], int index);
 int do_plg(char *PLID, char letter, int trials);
 int do_pwg(char* PLID, char* word, int trials);
+int send_rwg(char status [], int index);
 int do_qut(char* PLID);
+int send_rwt(char status [], int index);
 int do_rev(char *PLID);
 
 typedef struct game {
@@ -50,7 +52,7 @@ typedef struct game {
     int trials;
 } Game;
 
-int fd, errcode;
+int fd, errcode, nOfWords;
 ssize_t n;
 socklen_t addrlen;
 struct addrinfo hints, *res;
@@ -64,7 +66,7 @@ char port [MAX_PORT_SIZE];
 int main(int argc, char *argv[]){
     char C_PLID[7], word[MAX_WORD_SIZE], letter;
     int trials;
-
+    nOfWords = 0;
     receive_cmd_arguments(argc, argv);
     make_udp_connection();
 
@@ -95,11 +97,13 @@ int main(int argc, char *argv[]){
     return 0;
 }
 
-char *get_random_word(char filename []){
+char *get_word(char filename []){
     char *line, *word;
     int nOfLines;
-
-    line = get_random_line(filename);
+    if (nOfWords == 0){
+        nOfWords = get_number_of_lines(filename);
+    }
+    line = get_line(filename, nOfWords);
     word = get_word_from_line(line);
     free(line);
     return word;
@@ -260,9 +264,11 @@ int do_rlg_ok_msg(int user_index, int letter_play){
         buf_ptr += sprintf(buf_ptr, " %d", pos[i]);
     }
     buf_ptr += sprintf(buf_ptr, "\n");
-    write(1, buf, 12+n*2);
     n=sendto(fd, buf, 12+n*2, 0, (struct sockaddr*)&addr,addrlen);
-    if(n==-1) exit(1); 
+    if(n==-1) 
+        exit(1); 
+    write(1,"sent: ", 6);
+    write(1, buffer, n);
     free(buf);
     return 0;
 }
@@ -311,7 +317,7 @@ int do_plg(char *PLID, char letter, int trials) {
         active_games[index]->trials += 1;
         if (changed==0){
             active_games[index]->errors += 1;
-            if (active_games[index]->errors >= active_games[index]->max_errors){
+            if (active_games[index]->errors > active_games[index]->max_errors){
                 write_letter_trial(letter, PLID);
                 end_game_file_create(active_games[index]->player_plid, 'F');
                 do_rlg("OVR", index);
@@ -343,38 +349,28 @@ int do_pwg(char* PLID, char* word, int trials) {
     char buffer[128];
     index = find_player_game_index(PLID);
     if (index==-1){
-        sprintf(buffer, "RWG ERR\n");
-        n=sendto(fd, buffer, 8, 0, (struct sockaddr*)&addr,addrlen);
-        if(n==-1) exit(1); 
+        send_rwg("ERR", index);
     }
     else if (active_games[index]->trials + 1 != trials) {
-        sprintf(buffer, "RWG INV %d\n", active_games[index]->trials);
-        n=sendto(fd, buffer, 128, 0, (struct sockaddr*)&addr,addrlen);
-        if(n==-1) exit(1); 
+        send_rwg("INV", index);
     }
     else {
         write_word_guess(word, PLID);
         active_games[index]->trials += 1;
         if (strcmp(word,active_games[index]->word)==0){
             end_game_file_create(active_games[index]->player_plid, 'W');
-            sprintf(buffer, "RWG WIN %d\n", active_games[index]->trials);
-            n=sendto(fd, buffer, 128, 0, (struct sockaddr*)&addr,addrlen);
-            if(n==-1) exit(1);
+            send_rwg("WIN", index);
             delete_active_game(PLID);
         }
         else{
             active_games[index]->errors++;
             if (active_games[index]->max_errors <= active_games[index]->errors){
                 end_game_file_create(active_games[index]->player_plid, 'F');
-                sprintf(buffer, "RWG OVR %d\n", active_games[index]->trials);
-                n=sendto(fd, buffer, 128, 0, (struct sockaddr*)&addr,addrlen);
-                if(n==-1) exit(1); 
+                send_rwg("OVR", index);
                 delete_active_game(PLID);
             }
             else {
-                sprintf(buffer, "RWG NOK %d\n", active_games[index]->trials);
-                n=sendto(fd, buffer, 128, 0, (struct sockaddr*)&addr,addrlen);
-                if(n==-1) exit(1); 
+                send_rwg("NOK", index);
             }
         }
     }
@@ -386,14 +382,29 @@ int do_qut(char* PLID){
     char buffer[128];
     index = find_player_game_index(PLID);
     if (index == -1){
-        n=sendto(fd, "RQT ERR\n", 8, 0, (struct sockaddr*)&addr,addrlen);
-        if(n==-1) exit(1); 
+        send_rwt("ERR", index);
     }
     else{
         end_game_file_create(active_games[index]->player_plid, 'Q');
+        send_rwt("OK", index);
+        delete_active_game(PLID);
+    }
+    return 0;
+}
+
+int send_rwt(char status [], int index){
+    if (strcmp(status, "ERR")==0){
+        sprintf(buffer, "RQT ERR\n");
+        n=sendto(fd, "RQT ERR\n", 8, 0, (struct sockaddr*)&addr,addrlen);
+        if(n==-1) exit(1); 
+    }
+    else if(strcmp(status, "OK")==0){
+        sprintf(buffer, "RQT OK\n");
         n=sendto(fd, "RQT OK\n", 7, 0, (struct sockaddr*)&addr,addrlen);
         if(n==-1) exit(1); 
     }
+    write(1,"sent: ", 6);
+    write(1, buffer, n);
     return 0;
 }
 
@@ -418,7 +429,7 @@ int create_active_game(int index, char plid[7]){
     active_games[index] = (Game *) malloc(sizeof(Game));
     active_games[index]->word = (char*) malloc(MAX_WORD_SIZE);
     strcpy(active_games[index]->player_plid, plid);
-    active_games[index]->word = get_random_word(word_filename);
+    active_games[index]->word = get_word(word_filename);
     active_games[index]->max_errors = get_max_errors(active_games[index]->word);
     active_games[index]->trials = 0;
     active_games[index]->errors = 0;
@@ -447,6 +458,8 @@ int do_rsg(char status [], int index){
     else{
         return 1;
     }
+    write(1,"sent: ", 6);
+    write(1, buffer, n);
     return 0;
 }
 
@@ -469,8 +482,11 @@ int do_rlg(char status [4], int index){
     else if (strcmp(status, "WIN")==0){
         sprintf(buffer, "RLG WIN %d\n",active_games[index]->trials);
     }
-    n=sendto(fd, buffer, 128, 0, (struct sockaddr*)&addr,addrlen);
-        if(n==-1) exit(1);
+    n=sendto(fd, buffer, sizeof buffer, 0, (struct sockaddr*)&addr,addrlen);
+    if(n==-1) 
+        exit(1);
+    write(1,"sent: ", 6);
+    write(1, buffer, n);
     return 0;
 }
 
@@ -490,15 +506,46 @@ int receive_cmd_arguments(int argc, char *argv []){
 }
 
 int make_udp_connection(){
-    fd=socket(AF_INET,SOCK_DGRAM,0);
-    if(fd==-1) exit(1);
-    memset(&hints,0,sizeof hints);
-    hints.ai_family=AF_INET; 
-    hints.ai_socktype=SOCK_DGRAM;
-    hints.ai_flags=AI_PASSIVE;
-    errcode = getaddrinfo(NULL, port, &hints,&res);
-    if(errcode!=0) exit(1);
-    n=bind(fd,res->ai_addr, res->ai_addrlen);
-    if(n==-1) exit(1);
+    fd = socket(AF_INET,SOCK_DGRAM,0);
+    if(fd==-1)
+        exit(1);
+    memset(&hints,0, sizeof hints);
+    hints.ai_family = AF_INET; 
+    hints.ai_socktype = SOCK_DGRAM;
+    hints.ai_flags = AI_PASSIVE;
+    errcode = getaddrinfo(NULL, port, &hints, &res);
+
+    if(errcode!=0) 
+        exit(1);
+    n = bind(fd, res->ai_addr, res->ai_addrlen);
+    if(n==-1) 
+        exit(1);
+    return 0;
+}
+
+int send_rwg(char status [], int index){
+    if (strcmp(status, "ERR") == 0){
+        sprintf(buffer, "RWG ERR\n");
+        n=sendto(fd, buffer, 8, 0, (struct sockaddr*)&addr,addrlen);
+    }
+    else {
+        if (strcmp(status, "INV") == 0){
+            sprintf(buffer, "RWG INV %d\n", active_games[index]->trials);
+        }
+        else if (strcmp(status, "WIN")==0){
+            sprintf(buffer, "RWG WIN %d\n", active_games[index]->trials);
+        }
+        else if (strcmp(status, "OVR")==0){
+            sprintf(buffer, "RWG OVR %d\n", active_games[index]->trials);
+        }
+        else if (strcmp(status, "NOK")==0){
+            sprintf(buffer, "RWG NOK %d\n", active_games[index]->trials);
+        }
+        n=sendto(fd, buffer, 11, 0, (struct sockaddr*)&addr,addrlen);
+    }
+    if(n==-1) 
+        exit(1); 
+    write(1,"sent: ", 6);
+    write(1, buffer, n);
     return 0;
 }
