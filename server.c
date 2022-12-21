@@ -108,16 +108,24 @@ char *get_random_word(char filename []){
 int get_max_errors(char *word){
     int word_length, total_guesses;
     word_length = strlen(word);
-    if (word_length <= 6) {total_guesses = 7;}
-    else if (word_length <= 10) {total_guesses = 8;}
-    else {total_guesses = 9;}
+    if (word_length <= 6) {
+        total_guesses = 7;
+    }
+    else if (word_length <= 10) {
+        total_guesses = 8;
+    }
+    else {
+        total_guesses = 9;
+    }
     return total_guesses;
 }
 
 int find_player_game_index(char *PLID){
     int i;
     for (i=0; i < MAX_ACTIVE_GAMES; i++){
-        if (active_games[i] != NULL && strcmp(active_games[i]->player_plid, PLID)==0){return i;}
+        if (active_games[i] != NULL && strcmp(active_games[i]->player_plid, PLID)==0){
+            return i;
+        }
     }
     return -1;
 }
@@ -242,7 +250,7 @@ int do_rlg_ok_msg(int user_index, int letter_play){
     int n = 0;
     for (int i = 0; i < strlen(active_games[user_index]->word); i++){
         if (active_games[user_index]->word[i] == letter_play){
-            pos[n] = i;
+            pos[n] = i+1;
             n++;
         }
     }

@@ -7,17 +7,18 @@
 #include <netdb.h>
 #include <arpa/inet.h>
 #include <stdio.h>
-
 #include "clientTCP.h"
-
 #define PORT "58011"
 
+#ifndef CLIENT_TCP_H
+#define CLIENT_TCP_H
 int fd, errcode;
-    ssize_t n;
-    socklen_t addrlen;
-    struct addrinfo hints, *res;
-    struct sockaddr_in addr;
-    char buffer[128];
+ssize_t n;
+socklen_t addrlen;
+struct addrinfo hints, *res;
+struct sockaddr_in addr;
+char buffer[128];
+#endif
 
 void connect_to_server() {
     fd=socket(AF_INET, SOCK_STREAM, 0);

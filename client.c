@@ -9,7 +9,6 @@
 #include <arpa/inet.h>
 #include <stdio.h>
 #include <signal.h>
-
 #include "clientTCP.h"
 //58011
 #define PORT "8080"
@@ -29,6 +28,74 @@ char host_info [MAX_HOST_INFO_SIZE];
 char port [MAX_PORT_SIZE];
 
 int receive_cmd_arguments(int argc, char *argv[]);
+int connect_to_udp_server();
+void start(char* PLID);
+void play(char* PLID, char letter);
+void guess(char* PLID, char* word, int size);
+void quit(char* PLID);
+void rev(char* PLID);
+
+
+int main(int argc, char *argv[]) {
+    char letter, input[128], word[30], PLID[7];
+    pid_t child;
+    int returnStatus;
+    //tejo.tecnico.ulisboa.pt
+    //LAPTOP-PUAA9FRQ
+    receive_cmd_arguments(argc, argv);
+    connect_to_udp_server();
+    while(1) {
+        printf("Enter a command: ");
+        fgets(input, sizeof input, stdin);
+        if (sscanf(input, "start %6s", PLID) || sscanf(input, "sg %6s", PLID)){
+            start(PLID);
+        }
+        else if (sscanf(input, "play %c", &letter) || sscanf(input, "pl %c", &letter)){
+            play(PLID, letter);
+        }
+        else if (sscanf(input, "guess %s", word) || sscanf(input, "gw %s", word)){
+            int size = strlen(word);
+            guess(PLID, word, size);
+        }
+        else if (strcmp(input, "scoreboard\n")==0 || strcmp(input, "sb\n")==0){
+            if ((child = fork()) == 0) {
+                scoreboard();
+                exit(0);
+            }
+            waitpid(child, &returnStatus, 0);
+        }
+        else if (strcmp(input, "hint\n")==0 || strcmp(input, "h\n")==0){
+            if ((child = fork()) == 0) {
+                hint(PLID);
+                exit(0);
+            }
+            waitpid(child, &returnStatus, 0);
+        }
+        else if (strcmp(input, "state\n")==0 || strcmp(input, "st\n")==0){
+            if ((child = fork()) == 0) {
+                state(PLID);
+                exit(0);
+            }
+            waitpid(child, &returnStatus, 0);
+        }
+        else if (strcmp(input, "quit\n")==0){
+            quit(PLID);
+        }
+        else if (strcmp(input, "exit\n")==0){
+            quit(PLID);
+            break;
+        }
+        else if (strcmp(input, "rev\n")==0){
+            rev(PLID);
+        }
+        else{
+            printf("Error in receiving input, try again!\n");
+        }
+        memset(buffer, 0, sizeof buffer);
+    }
+    return 0;
+}
+
 
 void start(char* PLID) {
     char *msg = malloc(11);
@@ -152,71 +219,6 @@ void rev(char* PLID) {
     sscanf(buffer, "RRV %s\n", word);
     printf("%s\n", word);
 }
-//tejo.tecnico.ulisboa.pt
-//LAPTOP-PUAA9FRQ
-int main(int argc, char *argv[]) {
-    char letter, input[128], word[30], PLID[7];
-    pid_t child;
-    int returnStatus;
-
-    fd=socket(AF_INET, SOCK_DGRAM, 0);
-    if (fd == -1) {exit(1);}
-    memset(&hints, 0, sizeof hints);
-    hints.ai_family = AF_INET;
-    hints.ai_socktype = SOCK_DGRAM;
-    errcode = getaddrinfo(host_info, port, &hints, &res);
-    if (errcode != 0) {exit(1);}
-    while(1) {
-        printf("Enter a command: ");
-        fgets(input, sizeof input, stdin);
-        if (sscanf(input, "start %6s", PLID) || sscanf(input, "sg %6s", PLID)){
-            start(PLID);
-        }
-        else if (sscanf(input, "play %c", &letter) || sscanf(input, "pl %c", &letter)){
-            play(PLID, letter);
-        }
-        else if (sscanf(input, "guess %s", word) || sscanf(input, "gw %s", word)){
-            int size = strlen(word);
-            guess(PLID, word, size);
-        }
-        else if (strcmp(input, "scoreboard\n")==0 || strcmp(input, "sb\n")==0){
-            if ((child = fork()) == 0) {
-                scoreboard();
-                exit(0);
-            }
-            waitpid(child, &returnStatus, 0);
-        }
-        else if (strcmp(input, "hint\n")==0 || strcmp(input, "h\n")==0){
-            if ((child = fork()) == 0) {
-                hint(PLID);
-                exit(0);
-            }
-            waitpid(child, &returnStatus, 0);
-        }
-        else if (strcmp(input, "state\n")==0 || strcmp(input, "st\n")==0){
-            if ((child = fork()) == 0) {
-                state(PLID);
-                exit(0);
-            }
-            waitpid(child, &returnStatus, 0);
-        }
-        else if (strcmp(input, "quit\n")==0){
-            quit(PLID);
-        }
-        else if (strcmp(input, "exit\n")==0){
-            quit(PLID);
-            break;
-        }
-        else if (strcmp(input, "rev\n")==0){
-            rev(PLID);
-        }
-        else{
-            printf("Error in receiving input, try again!\n");
-        }
-        memset(buffer, 0, sizeof buffer);
-    }
-    return 0;
-}
 
 int receive_cmd_arguments(int argc, char *argv[]){
     char hostname[1024];
@@ -226,7 +228,7 @@ int receive_cmd_arguments(int argc, char *argv[]){
         hostname[1023] = '\0';
         strcpy(host_info, hostname);
         // if GSPORT ommited, 58000+GN
-        strcpy(port, DEFAULT_PORT);
+        strcpy(port, PORT);
     }
     else if (argc==3){
         // GSIP argument
@@ -255,6 +257,21 @@ int receive_cmd_arguments(int argc, char *argv[]){
     }
     else {
         return 1;
+    }
+    return 0;
+}
+
+int connect_to_udp_server(){
+    fd=socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd == -1) {
+        exit(1);
+    }
+    memset(&hints, 0, sizeof hints);
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_DGRAM;
+    errcode = getaddrinfo(host_info, port, &hints, &res);
+    if (errcode != 0) {
+        exit(1);
     }
     return 0;
 }
