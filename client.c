@@ -13,6 +13,9 @@
 #include "clientTCP.h"
 //58011
 #define PORT "8080"
+#define MAX_PORT_SIZE 6
+#define MAX_HOST_INFO_SIZE 1024
+#define DEFAULT_PORT "58011"
 
 int fd, errcode;
 ssize_t n;
@@ -22,6 +25,10 @@ struct sockaddr_in addr;
 char buffer[128];
 int trials;
 char game_word[30];
+char host_info [MAX_HOST_INFO_SIZE];
+char port [MAX_PORT_SIZE];
+
+int receive_cmd_arguments(int argc, char *argv[]);
 
 void start(char* PLID) {
     char *msg = malloc(11);
@@ -147,16 +154,17 @@ void rev(char* PLID) {
 }
 //tejo.tecnico.ulisboa.pt
 //LAPTOP-PUAA9FRQ
-int main() {
+int main(int argc, char *argv[]) {
     char letter, input[128], word[30], PLID[7];
     pid_t child;
     int returnStatus;
+
     fd=socket(AF_INET, SOCK_DGRAM, 0);
     if (fd == -1) {exit(1);}
     memset(&hints, 0, sizeof hints);
     hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_DGRAM;
-    errcode = getaddrinfo("LAPTOP-PUAA9FRQ", PORT, &hints, &res);
+    errcode = getaddrinfo(host_info, port, &hints, &res);
     if (errcode != 0) {exit(1);}
     while(1) {
         printf("Enter a command: ");
@@ -203,9 +211,50 @@ int main() {
             rev(PLID);
         }
         else{
-            printf("you fucked up\n");
+            printf("Error in receiving input, try again!\n");
         }
         memset(buffer, 0, sizeof buffer);
+    }
+    return 0;
+}
+
+int receive_cmd_arguments(int argc, char *argv[]){
+    char hostname[1024];
+    if (argc == 1) {
+        // server runs on this machine
+        gethostname(hostname, 1023);
+        hostname[1023] = '\0';
+        strcpy(host_info, hostname);
+        // if GSPORT ommited, 58000+GN
+        strcpy(port, DEFAULT_PORT);
+    }
+    else if (argc==3){
+        // GSIP argument
+        if (strcmp(argv[1], "-n")==0){
+            strcpy(host_info, argv[2]);
+        }
+        // GSport argument
+        else if (strcmp(argv[1], "-p")==0){
+            strcpy(port, argv[2]);
+        }
+    }
+    else if (argc==5){
+        // receiving all arguments by different orders
+        if (strcmp(argv[1], "-n")==0){
+            strcpy(host_info, argv[2]);
+        }
+        else if (strcmp(argv[3], "-n")==0){
+            strcpy(host_info, argv[4]);
+        }
+        if (strcmp(argv[1], "-p")==0){
+            strcpy(port, argv[2]);
+        }
+        else if (strcmp(argv[3], "-p")==0){
+            strcpy(port, argv[4]);
+        }
+    }
+    else {
+        return 1;
     }
     return 0;
 }
