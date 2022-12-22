@@ -33,9 +33,10 @@ int end_game_file_create(char plid [7], char code);
 int delete_active_game(char plid [7]);
 int do_rlg_ok_msg(int user_index, int letter_play);
 int create_active_game(int index, char plid[7]);
+int n_int_chars(int n);
 int do_sng(char* PLID);
 int do_rsg(char status [], int index);
-int do_rlg(char status [4], int index);
+int do_rlg(char status [], int index);
 int do_plg(char *PLID, char letter, int trials);
 int do_pwg(char* PLID, char* word, int trials);
 int send_rwg(char status [], int index);
@@ -251,7 +252,7 @@ int delete_active_game(char plid [7]){
 int do_rlg_ok_msg(int user_index, int letter_play){
     char *buf = (char*) malloc(128*sizeof(char)), *buf_ptr = buf;
     int pos [strlen(active_games[user_index]->word)];
-    int n = 0;
+    int n = 0, buf_size;
     for (int i = 0; i < strlen(active_games[user_index]->word); i++){
         if (active_games[user_index]->word[i] == letter_play){
             pos[n] = i+1;
@@ -260,15 +261,17 @@ int do_rlg_ok_msg(int user_index, int letter_play){
     }
     pos[n] = '\0';
     buf_ptr += sprintf(buf_ptr, "RLG OK %d %d", active_games[user_index]->trials, n);
+    buf_size = 8 + n_int_chars(active_games[user_index]->trials) + n_int_chars(n);
     for (int i = 0 ; i != n ; i++) {
         buf_ptr += sprintf(buf_ptr, " %d", pos[i]);
+        buf_size += n_int_chars(pos[i]) + 1;
     }
     buf_ptr += sprintf(buf_ptr, "\n");
-    n=sendto(fd, buf, 12+n*2, 0, (struct sockaddr*)&addr,addrlen);
+    n=sendto(fd, buf, buf_size+1, 0, (struct sockaddr*)&addr,addrlen);
     if(n==-1) 
         exit(1); 
     write(1,"sent: ", 6);
-    write(1, buffer, n);
+    write(1, buf, n);
     free(buf);
     return 0;
 }
@@ -463,26 +466,35 @@ int do_rsg(char status [], int index){
     return 0;
 }
 
-int do_rlg(char status [4], int index){
+int do_rlg(char status [], int index){
+    int trials;
     if (strcmp(status, "ERR")==0){
         sprintf(buffer, "RLG ERR\n");
+        n=sendto(fd, buffer, 8, 0, (struct sockaddr*)&addr,addrlen);
     }
-    else if (strcmp(status, "INV")==0){
-        sprintf(buffer, "RLG INV %d\n", active_games[index]->trials);
+    else{
+        trials = active_games[index]->trials;
+        if (strcmp(status, "INV")==0){
+            sprintf(buffer, "RLG INV %d\n", trials);
+        }
+        else if (strcmp(status, "DUP")==0){
+            sprintf(buffer, "RLG DUP %d\n", trials);
+        }
+        else if (strcmp(status, "OVR")==0){
+            sprintf(buffer, "RLG OVR %d\n", trials);
+        }
+        else if (strcmp(status, "NOK")==0){
+            sprintf(buffer, "RLG NOK %d\n", trials);
+        }
+        else if (strcmp(status, "WIN")==0){
+            sprintf(buffer, "RLG WIN %d\n", trials);
+        }
+        else {
+            return -1;
+        }
+        n=sendto(fd, buffer, 9+n_int_chars(trials), 0, (struct sockaddr*)&addr,addrlen);
     }
-    else if (strcmp(status, "DUP")==0){
-        sprintf(buffer, "RLG DUP %d\n", active_games[index]->trials);
-    }
-    else if (strcmp(status, "OVR")==0){
-        sprintf(buffer, "RLG OVR %d\n", active_games[index]->trials);
-    }
-    else if (strcmp(status, "NOK")==0){
-        sprintf(buffer, "RLG NOK %d\n", active_games[index]->trials);
-    }
-    else if (strcmp(status, "WIN")==0){
-        sprintf(buffer, "RLG WIN %d\n",active_games[index]->trials);
-    }
-    n=sendto(fd, buffer, sizeof buffer, 0, (struct sockaddr*)&addr,addrlen);
+    
     if(n==-1) 
         exit(1);
     write(1,"sent: ", 6);
@@ -548,4 +560,17 @@ int send_rwg(char status [], int index){
     write(1,"sent: ", 6);
     write(1, buffer, n);
     return 0;
+}
+
+int n_int_chars(int n){
+    if (n<10){
+        return 1;
+    }
+    else if (n<100){
+        return 2;
+    }
+    else if (n<1000){
+        return 3;
+    }
+    return -1;
 }
