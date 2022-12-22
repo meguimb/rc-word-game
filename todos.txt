@@ -1,4 +1,0 @@
-In reply to a SNG request the GS server checks if player PLID has any ongoing
-game (with play moves), in which case the reply status is NOK. If the game
-can be started (or no play was yet received) the status is OK
-=> accept an active game if no plays have been made
